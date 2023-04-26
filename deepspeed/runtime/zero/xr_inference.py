@@ -26,7 +26,7 @@ class xr_param:
                     [p.ds_tensor for p in params]
                 ).pin_memory()
 
-    def param_copy(partitions: tensor, param: Iterable[Parameter]):
+    def param_copy(partitions: torch.tensor, param: Iterable[Parameter]):
         if tuple(p.ds_id for p in param) not in self.key_dict:
             self.__setattr__(param)
         partitions.copy_(self.key_dict[tuple(p.ds_id for p in param)])

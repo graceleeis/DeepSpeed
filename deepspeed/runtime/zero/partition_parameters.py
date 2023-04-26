@@ -42,7 +42,7 @@ param_count = 0
 partitioned_param_data_shape = [0]
 zero_init_enabled = False
 key_dict = {}
-
+XR_PARAM_SCOPE_SIZE = 50*1024*1024*1024 # 50GB
 
 def _dist_allgather_fn(input_tensor: Tensor, output_tensor: Tensor, group=None):
     return instrument_w_nvtx(dist.allgather_fn)(
@@ -445,6 +445,12 @@ class InsertPostInitMethodToModuleSubClasses(object):
                 "finished initializing model with %.2fB parameters", param_count / 1e9
             )
 
+        for name, params in self.module.named_parameters(recurse=False):
+            for param in params:
+                print(f"name is {name}, param id is {param.ds_id}, param size is {param.ds_numel()}")
+
+        sssss
+
         # Now that we cleaned up the metaclass injection, raise the exception.
         if exc_type is not None:
             return False
@@ -573,6 +579,8 @@ class AllGatherCoalescedHandle:
 # Replaces all parameters in module with Scattered Parameters
 class Init(InsertPostInitMethodToModuleSubClasses):
     param_id = 0
+    xr_offset = 0
+    xr_all_param_scope = torch.empty(XR_PARAM_SCOPE_SIZE, dtype=torch.float16, device="cpu").pin_memory()
 
     def __init__(
         self,
@@ -686,6 +694,12 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
                 model = deepspeed.zero.Init(module=model)
         """
+        # import debugpy
+        # # debugpy.listen(("127.0.0.1", 12345))
+        # debugpy.listen(("localhost", 56789))
+        # print("Waiting for debugger attach")
+        # debugpy.wait_for_client()
+        # breakpoint()
         if config is not None:
             config_dict_or_path = config
             logger.warning(
@@ -819,6 +833,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         )
 
                 param.partition()
+        print(f"xr totally param_count={param_count}")
         see_memory_usage(
             f"Param count {param_count}. After converting and partitioning parmas in {module.__class__.__name__}",
             force=False,
@@ -1144,6 +1159,10 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             # print_rank_0(f"Before Partitioning Param {param.ds_id}")
             # self._param_status(param)
             self._partition_param(param, has_been_updated=has_been_updated)
+            xr_partition_param = Init.xr_all_param_scope[Init.xr_offset:Init.xr_offset + param.ds_numel]
+            xr_partition_param.copy_(param.ds_tensor)
+            param.ds_tensor = xr_partition_param
+            Init.xr_offset += param.ds_numel
             param.ds_status = ZeroParamStatus.NOT_AVAILABLE
             # if param.ds_tensor is not None:
             #    assert id(param.data) == id(param.ds_tensor.data), \
@@ -1242,7 +1261,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
             if start < param.ds_numel and end <= param.ds_numel:
                 src_tensor = one_dim_param.narrow(0, start, partition_size)
-
                 param.ds_tensor.copy_(
                     src_tensor
                 )  # xr: partition parameter to remote device, param.ds_tensor.device=cpu, src_tensor.device=gpu, param.device=gpu
