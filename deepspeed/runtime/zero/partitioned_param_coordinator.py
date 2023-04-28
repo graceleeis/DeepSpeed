@@ -399,6 +399,15 @@ class PartitionedParameterCoordinator:
     def release_sub_module(self, submodule: Module) -> None:
         """release the parameters of a sub module, assuming they meet conditions to
         be released."""
+        # import builtins
+        # print(f"zhixu_step is {builtins.zhixu_step}")
+        # if builtins.zhixu_step >= 2:
+        # import debugpy
+        # # debugpy.listen(("127.0.0.1", 12345))
+        # debugpy.listen(("localhost", 56789))
+        # print("Waiting for debugger attach")
+        # debugpy.wait_for_client()
+
         params_to_release = (
             self.__params_to_release(submodule, self.__step_id)
             if self.is_complete_trace()

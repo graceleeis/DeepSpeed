@@ -200,7 +200,7 @@ class DeepSpeedZeRoOffload(object):
             self.offload_device = offload_param_config.device
             self.offload_param_pin_memory = offload_param_config.pin_memory
 
-        breakpoint()
+        # breakpoint()
         self._convert_to_zero_parameters(ds_config, module, mpu)
 
         for m in module.modules():
