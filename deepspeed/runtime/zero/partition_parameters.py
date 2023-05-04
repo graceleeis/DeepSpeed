@@ -43,16 +43,20 @@ param_count = 0
 partitioned_param_data_shape = [0]
 zero_init_enabled = False
 key_dict = {}
-XR_PARAM_SCOPE_SIZE = 13*1024*1024*1024 # 5GB
-# XR_PARAM_SCOPE_SIZE_1 = 8*1024*1024*1024 # 5GB
-# XR_PARAM_SCOPE_SIZE_2 = 4*1024*1024*1024 # 5GB
+# XR_PARAM_SCOPE_SIZE = 13*1024*1024*1024 # 5GB
+XR_PARAM_SCOPE_SIZE_1 = 8*1024*1024*1024 # 5GB
+XR_PARAM_SCOPE_SIZE_2 = 4*1024*1024*1024 # 5GB
 # XR_PARAM_SCOPE_SIZE_3 = 1*1024*1024*1024 # 5GB
 ENABLE_XR_NEBULA=True
 # ENABLE_XR_NEBULA=False
 
 if ENABLE_XR_NEBULA:
-    xr_offset = 0
-    xr_all_param_scope = None
+    xr_offset_1 = 0
+    xr_offset_2 = 0
+    xr_offset_3 = 0
+    xr_all_param_scope_1 = None
+    xr_all_param_scope_2 = None
+    xr_all_param_scope_2 = None
     # xr_all_param_scope = torch.empty(XR_PARAM_SCOPE_SIZE, dtype=torch.float16, device="cpu").pin_memory()
     # xr_all_param_scope.ds_numel = XR_PARAM_SCOPE_SIZE
     # xr_all_param_scope.status = "NEEDS_INIT"
@@ -1187,23 +1191,35 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         #     breakpoint()
                         return
                 global xr_param_index
-                global xr_all_param_scope
-                global xr_offset
-                # breakpoint()
-                if xr_all_param_scope is None:
-                    # xr_all_param_scope_1 = torch.empty(XR_PARAM_SCOPE_SIZE_1, dtype=torch.float16, device="cpu").pin_memory()
-                    # xr_all_param_scope_2 = torch.empty(XR_PARAM_SCOPE_SIZE_2, dtype=torch.float16, device="cpu").pin_memory()
+                global xr_offset_1, xr_offset_2, xr_offset_3
+                global xr_all_param_scope_1, xr_all_param_scope_2, xr_all_param_scope_3
+
+                if xr_all_param_scope_1 is None:
+                    xr_all_param_scope_1 = torch.empty(XR_PARAM_SCOPE_SIZE_1, dtype=torch.float16, device="cpu").pin_memory()
+                    xr_all_param_scope_2 = torch.empty(XR_PARAM_SCOPE_SIZE_2, dtype=torch.float16, device="cpu").pin_memory()
                     # xr_all_param_scope_3 = torch.empty(XR_PARAM_SCOPE_SIZE_3, dtype=torch.float16, device="cpu").pin_memory()
-                    # xr_all_param_scope = [xr_all_param_scope_1, xr_all_param_scope_2, xr_all_param_scope_3]
-                    xr_all_param_scope = torch.empty(XR_PARAM_SCOPE_SIZE, dtype=torch.float16, device="cpu").pin_memory()
-                # if not any(param.ds_id in d for d in xr_all_param_scope):
+
 
                 if param.ds_id not in xr_param_index:
-                    xr_param_index[param.ds_id] = (xr_offset, param.ds_tensor.ds_numel)
-                    xr_offset += param.ds_tensor.ds_numel
+                    if xr_offset_1 + param.ds_tensor.ds_numel <= XR_PARAM_SCOPE_SIZE_1:
+                        xr_param_index[param.ds_id] = (1, xr_offset_1, param.ds_tensor.ds_numel)
+                        xr_offset_1 += param.ds_tensor.ds_numel
+                    elif xr_offset_2 + param.ds_tensor.ds_numel <= XR_PARAM_SCOPE_SIZE_2:
+                        xr_param_index[param.ds_id] = (2, xr_offset_2, param.ds_tensor.ds_numel)
+                        xr_offset_2 += param.ds_tensor.ds_numel
+                    # elif xr_offset_3 + param.ds_tensor.ds_numel <= XR_PARAM_SCOPE_SIZE_3:
+                    #     xr_param_index[param.ds_id] = (3, xr_offset_3, param.ds_tensor.ds_numel)
+                    #     xr_offset_3 += param.ds_tensor.ds_numel
+                    else:
+                        raise Exception(f"xr param scope is not enough, xr_offset_1 {xr_offset_1}, xr_offset_2 {xr_offset_2}")
 
-                xr_partition_param = xr_all_param_scope[xr_param_index[param.ds_id][0]:xr_param_index[param.ds_id][0] + xr_param_index[param.ds_id][1]]
-
+                param_number = xr_param_index[param.ds_id][0]
+                if param_number==1:
+                    xr_partition_param = xr_all_param_scope_1[xr_param_index[param.ds_id][1]:xr_param_index[param.ds_id][1] + xr_param_index[param.ds_id][2]]
+                elif param_number==2:
+                    xr_partition_param = xr_all_param_scope_2[xr_param_index[param.ds_id][1]:xr_param_index[param.ds_id][1] + xr_param_index[param.ds_id][2]]
+                # elif param_number==3:
+                #     xr_partition_param = xr_all_param_scope_3[xr_param_index[param.ds_id][1]:xr_param_index[param.ds_id][1] + xr_param_index[param.ds_id][2]]
                 # xr_partition_param.ds_numel = param.ds_tensor.ds_numel
                 # xr_partition_param.status = param.ds_tensor.status
                 # xr_partition_param.final_location = param.ds_tensor.final_location
