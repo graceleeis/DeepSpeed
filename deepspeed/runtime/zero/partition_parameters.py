@@ -38,30 +38,23 @@ from ..swap_tensor.partitioned_param_swapper import (
     AsyncPartitionedParameterSwapper,
     PartitionedParamStatus,
 )
+from deepspeed.runtime.zero.xr_inference import XR_param
 
 param_count = 0
 partitioned_param_data_shape = [0]
 zero_init_enabled = False
-key_dict = {}
-# XR_PARAM_SCOPE_SIZE = 13*1024*1024*1024 # 5GB
-XR_PARAM_SCOPE_SIZE_1 = 8*1024*1024*1024 # 5GB
-XR_PARAM_SCOPE_SIZE_2 = 4*1024*1024*1024 # 5GB
-# XR_PARAM_SCOPE_SIZE_3 = 1*1024*1024*1024 # 5GB
+
+XR_PARAM_SCOPE_SIZE_1 = 16*1024*1024*1024
+XR_PARAM_SCOPE_SIZE_2 = 8*1024*1024*1024
+XR_PARAM_SCOPE_SIZE_3 = 4*1024*1024*1024
+XR_PARAM_SCOPE_SIZE_4 = 2*1024*1024*1024
+XR_PARAM_SCOPE_SIZE_5 = 1*1024*1024*1024
 ENABLE_XR_NEBULA=True
 # ENABLE_XR_NEBULA=False
 
 if ENABLE_XR_NEBULA:
-    xr_offset_1 = 0
-    xr_offset_2 = 0
-    xr_offset_3 = 0
-    xr_all_param_scope_1 = None
-    xr_all_param_scope_2 = None
-    xr_all_param_scope_2 = None
-    # xr_all_param_scope = torch.empty(XR_PARAM_SCOPE_SIZE, dtype=torch.float16, device="cpu").pin_memory()
-    # xr_all_param_scope.ds_numel = XR_PARAM_SCOPE_SIZE
-    # xr_all_param_scope.status = "NEEDS_INIT"
-    # xr_all_param_scope.final_location = "CPU"
     xr_param_index = {}
+    xr_scope = []
 
 def _dist_allgather_fn(input_tensor: Tensor, output_tensor: Tensor, group=None):
     return instrument_w_nvtx(dist.allgather_fn)(
@@ -464,12 +457,6 @@ class InsertPostInitMethodToModuleSubClasses(object):
                 "finished initializing model with %.2fB parameters", param_count / 1e9
             )
 
-        # for name, params in self.module.named_parameters(recurse=False):
-        #     for param in params:
-        #         print(f"name is {name}, param id is {param.ds_id}, param size is {param.ds_numel()}")
-
-        # sssss
-
         # Now that we cleaned up the metaclass injection, raise the exception.
         if exc_type is not None:
             return False
@@ -783,8 +770,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         if module is not None:
             assert isinstance(module, torch.nn.Module)
             # breakpoint()
-            if enable_nebula:
-                xr_param.init(module.parameters(recurse=True))
             self._convert_to_zero_parameters(
                 module.parameters(recurse=True)
             )  # xr: DeepSpeedZeRoOffload call init
@@ -935,17 +920,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 # otherwise could mix data between tensors.
                 assert_ints_same_as_other_ranks([p.ds_tensor.ds_numel for p in params])
 
-            # tk = tuple(p.ds_id for p in params)
-            # assert tk==tuple(sorted(tk)), f"param ids must be sorted, got {tk}"
-            # for p in params:
-            #     print("xr p ds_id is ", p.ds_id)
-            # print("------------------------------------------------------")
-            # if tk==(3,4,5):
-            #     breakpoint()
-            # if tk==(3,4):
-            #     breakpoint()
-
-            global key_dict
             if len(params) == 1:
                 # have an opportunity to avoid some intermediate memory allocations
                 (param,) = params
@@ -955,9 +929,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     device=torch.cuda.current_device(),
                     requires_grad=False,
                 )
-                # if tk not in key_dict:
-                #     key_dict[tk] = param.ds_tensor.pin_memory()
-                #     param.ds_tensor.data = torch.zeros(1, dtype=param.ds_tensor.dtype, device=param.ds_tensor.device)
+
                 handle = _dist_allgather_fn(
                     param.ds_tensor.to(torch.cuda.current_device()),
                     param_buffer,
@@ -970,7 +942,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 )
                 return AllGatherHandle(handle, param)
             else:
-                # breakpoint()
                 partition_sz = sum(p.ds_tensor.ds_numel for p in params)
                 flat_tensor = torch.empty(
                     partition_sz * self.world_size,
@@ -984,29 +955,10 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         flat_tensor.narrow(0, partition_sz * i, partition_sz)
                     )
 
-                # for p in params:
-                #     print(f"p.ds_tensor={p.ds_tensor.device} rank={self.rank}")
-                # breakpoint()
-                # instrument_w_nvtx(torch.cat)(
-                #     [p.ds_tensor.to(torch.cuda.current_device()) for p in params],
-                #     out=partitions[self.rank])
-                # if params[0].ds_tensor.device == torch.device('cuda',torch.cuda.current_device()):
                 instrument_w_nvtx(torch.cat)(
                     [p.ds_tensor.to(torch.cuda.current_device()) for p in params],
                     out=partitions[self.rank],
                 )
-                # else:
-
-                # if tk not in key_dict:
-                #     # print("using new tensor")
-                #     key_dict[tk] = torch.cat([p.ds_tensor for p in params]).pin_memory()
-                #     for p in params:
-                #         # free_param(p)
-                #         # p.ds_tensor.data = torch.zeros(0, dtype=p.ds_tensor.dtype, device=p.ds_tensor.device)
-                #         p.ds_tensor.data = torch.zeros(1, dtype=p.ds_tensor.dtype, device=p.ds_tensor.device)
-                #         # del p.ds_tensor
-                # # print(f"key_dict[tk]={key_dict[tk].device}, rank={self.rank}, size={key_dict[tk].size()}, is_pinned={key_dict[tk].is_pinned()}")
-                # partitions[self.rank].copy_(key_dict[tk])
 
                 handle = _dist_allgather_fn(
                     partitions[self.rank], flat_tensor, self.ds_process_group
@@ -1181,53 +1133,35 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             # self._param_status(param)
             self._partition_param(param, has_been_updated=has_been_updated)
             param.ds_status = ZeroParamStatus.NOT_AVAILABLE
+
             if ENABLE_XR_NEBULA:
                 import inspect
                 for caller in inspect.stack():
                     if caller.function == "__release_param":
-                        # expected_xr_tensor = Init.xr_all_param_scope[Init.xr_param_index[param.ds_id][0]:Init.xr_param_index[param.ds_id][0] + Init.xr_param_index[param.ds_id][1]]
-                        # assert torch.all(expected_xr_tensor == param.ds_tensor), "xr partitioning error"
-                        # if param.ds_id==0:
-                        #     breakpoint()
                         return
                 global xr_param_index
-                global xr_offset_1, xr_offset_2, xr_offset_3
-                global xr_all_param_scope_1, xr_all_param_scope_2, xr_all_param_scope_3
+                global xr_scope
 
-                if xr_all_param_scope_1 is None:
-                    xr_all_param_scope_1 = torch.empty(XR_PARAM_SCOPE_SIZE_1, dtype=torch.float16, device="cpu").pin_memory()
-                    xr_all_param_scope_2 = torch.empty(XR_PARAM_SCOPE_SIZE_2, dtype=torch.float16, device="cpu").pin_memory()
-                    # xr_all_param_scope_3 = torch.empty(XR_PARAM_SCOPE_SIZE_3, dtype=torch.float16, device="cpu").pin_memory()
-
+                if not xr_scope:
+                    for i in (1,2):
+                        xr_scope.append([(torch.empty(eval(f"XR_PARAM_SCOPE_SIZE_{i}"), dtype=torch.float16, device="cpu").pin_memory()),0, i])
 
                 if param.ds_id not in xr_param_index:
-                    if xr_offset_1 + param.ds_tensor.ds_numel <= XR_PARAM_SCOPE_SIZE_1:
-                        xr_param_index[param.ds_id] = (1, xr_offset_1, param.ds_tensor.ds_numel)
-                        xr_offset_1 += param.ds_tensor.ds_numel
-                    elif xr_offset_2 + param.ds_tensor.ds_numel <= XR_PARAM_SCOPE_SIZE_2:
-                        xr_param_index[param.ds_id] = (2, xr_offset_2, param.ds_tensor.ds_numel)
-                        xr_offset_2 += param.ds_tensor.ds_numel
-                    # elif xr_offset_3 + param.ds_tensor.ds_numel <= XR_PARAM_SCOPE_SIZE_3:
-                    #     xr_param_index[param.ds_id] = (3, xr_offset_3, param.ds_tensor.ds_numel)
-                    #     xr_offset_3 += param.ds_tensor.ds_numel
-                    else:
-                        raise Exception(f"xr param scope is not enough, xr_offset_1 {xr_offset_1}, xr_offset_2 {xr_offset_2}")
+                    for s in xr_scope:
+                        if s[1] + param.ds_tensor.ds_numel <= torch.numel(s[0]):
+                            xr_param_index[param.ds_id] = (s[2], s[1], param.ds_tensor.ds_numel)
+                            s[1] += param.ds_tensor.ds_numel
+                            break
 
                 param_number = xr_param_index[param.ds_id][0]
-                if param_number==1:
-                    xr_partition_param = xr_all_param_scope_1[xr_param_index[param.ds_id][1]:xr_param_index[param.ds_id][1] + xr_param_index[param.ds_id][2]]
-                elif param_number==2:
-                    xr_partition_param = xr_all_param_scope_2[xr_param_index[param.ds_id][1]:xr_param_index[param.ds_id][1] + xr_param_index[param.ds_id][2]]
-                # elif param_number==3:
-                #     xr_partition_param = xr_all_param_scope_3[xr_param_index[param.ds_id][1]:xr_param_index[param.ds_id][1] + xr_param_index[param.ds_id][2]]
-                # xr_partition_param.ds_numel = param.ds_tensor.ds_numel
-                # xr_partition_param.status = param.ds_tensor.status
-                # xr_partition_param.final_location = param.ds_tensor.final_location
+                xr_partition_param = None
+                for s in xr_scope:
+                    if s[2] == param_number:
+                        xr_partition_param = s[0][xr_param_index[param.ds_id][1]:xr_param_index[param.ds_id][1] + xr_param_index[param.ds_id][2]]
+                        break
+
                 xr_partition_param.copy_(param.ds_tensor)
-            # print(f"Param {param.ds_id} partitioning to xr, offset {Init.xr_offset}, param.ds_tensor.ds_numel {param.ds_tensor.ds_numel}")
                 param.ds_tensor.data = xr_partition_param.data
-                # param.ds_tensor = xr_partition_param
-                # print(f"Param {param.ds_id} partitioned to xr, offset {Init.xr_offset}")
             # if param.ds_tensor is not None:
             #    assert id(param.data) == id(param.ds_tensor.data), \
             #    "After the parameters are initially partitioned, make sure we are not recreating the partition."

@@ -4,33 +4,27 @@ from typing import Iterable
 from torch.nn import Parameter
 
 
-class xr_param:
-    def __init__(self, key_dict):
-        self.key_dict = {}
+class XR_param:
+    def __init__(self, max):
+        self.max = max
 
-    def __getattr__(self, key):
-        return self.key_dict[key]
+    def __iter__(self):
+        self.n = 1
+        self.param_scope = None
+        self.offset = 0
+        return self
 
-    def _set_key(self, param: Iterable[Parameter]):
-        tk = hash(tuple(p.ds_id for p in param)) % 256
-        return tk
-
-    def set_map(self, param: Iterable[Parameter]):
-        # consistent hash
-        tk = self._set_key(param)
-        if len(param) == 1:
-            self.key_dict[tk] = param.ds_tensor.pin_memory()
+    def __next__(self):
+        if self.n <= self.max:
+            self.param_scope = self.set_scope(eval(f"XR_PARAM_SCOPE_SIZE_{self.n}"))
+            res = self.param_scope, self.offset, self.n
+            self.n += 1
+            return res
         else:
-            for p in param:
-                self.key_dict[tk] = torch.cat(
-                    [p.ds_tensor for p in params]
-                ).pin_memory()
+            raise StopIteration
 
-    def param_copy(partitions: torch.tensor, param: Iterable[Parameter]):
-        if tuple(p.ds_id for p in param) not in self.key_dict:
-            self.__setattr__(param)
-        partitions.copy_(self.key_dict[tuple(p.ds_id for p in param)])
-        return partitions
+    def set_scope(self, size):
+        self.param_scope = torch.empty(size, dtype=torch.float16, device="cpu").pin_memory()
+        return self.param_scope
 
-    def free_param():
-        pass
+

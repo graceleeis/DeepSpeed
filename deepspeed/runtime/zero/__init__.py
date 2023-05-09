@@ -12,4 +12,4 @@ from .partition_parameters import register_external_parameter
 from .tiling import TiledLinear
 from .tiling import TiledLinearReturnBias
 
-from .xr_inference import xr_param
+from .xr_inference import XR_param
