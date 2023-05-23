@@ -1,7 +1,4 @@
 import torch
-import hashlib
-from typing import Iterable
-from torch.nn import Parameter
 
 
 class XR_param:
@@ -24,7 +21,7 @@ class XR_param:
             raise StopIteration
 
     def set_scope(self, size):
-        self.param_scope = torch.empty(size, dtype=torch.float16, device="cpu").pin_memory()
+        self.param_scope = torch.empty(size,
+                                       dtype=torch.float16,
+                                       device="cpu").pin_memory()
         return self.param_scope
-
-

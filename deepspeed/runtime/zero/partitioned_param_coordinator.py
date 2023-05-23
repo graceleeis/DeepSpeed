@@ -47,13 +47,11 @@ class ZeRoTraceMode(Enum):
 
 class PartitionedParameterCoordinator:
     """Handles partitioning and gathering of parameters."""
-
     class __InflightParamRegistry(UserDict):
         """registry for parameters in flight"""
-
-        def __setitem__(
-            self, param: Parameter, handle: AllGatherCoalescedHandle
-        ) -> None:
+        def __setitem__(self,
+                        param: Parameter,
+                        handle: AllGatherCoalescedHandle) -> None:
             if param in self.data:
                 raise RuntimeError(f"{param.ds_summary()} already in registry")
             if param.ds_status != ZeroParamStatus.INFLIGHT:
@@ -85,11 +83,9 @@ class PartitionedParameterCoordinator:
         self.__submodule_order: Iterable[Module] = []
         self.__param_order: Iterable[__class__.__ParamInTrace] = []
         self.__most_recent_step_id_param_fetched_for = collections.defaultdict(
-            lambda: int(-1e10)
-        )
+            lambda: int(-1e10))
         self.__step_id_module_fetched_for = collections.defaultdict(
-            lambda: collections.deque()
-        )
+            lambda: collections.deque())
         # number of available params, and max number of available params
         self.__n_available_params: int = 0
         self.__max_n_available_params: int = max_available_parameters_in_numel
@@ -131,8 +127,7 @@ class PartitionedParameterCoordinator:
         self.__submodule_order = []
         self.__param_order = []
         self.__most_recent_step_id_param_fetched_for = collections.defaultdict(
-            lambda: int(-1e10)
-        )
+            lambda: int(-1e10))
         self.__param_queue = None
 
     def is_complete_trace(self) -> bool:
@@ -165,8 +160,7 @@ class PartitionedParameterCoordinator:
         """adds sub module to trace"""
         if not self.is_record_trace():
             raise RuntimeError(
-                f"attempted to record trace when status = {self.__trace_mode}"
-            )
+                f"attempted to record trace when status = {self.__trace_mode}")
 
         self.__submodule_order.append(sub_module)
         self.__step_id_module_fetched_for[sub_module.id].append(self.__step_id)
@@ -175,14 +169,13 @@ class PartitionedParameterCoordinator:
         """adds sub module to trace"""
         if not self.is_record_trace():
             raise RuntimeError(
-                f"attempted to record trace when status = {self.__trace_mode}"
-            )
+                f"attempted to record trace when status = {self.__trace_mode}")
 
         step_id = self.__step_id_module_fetched_for[sub_module.id].popleft()
         for param in sorted(set(iter_params(sub_module)), key=lambda p: p.ds_id):
             self.__param_order.append(
-                __class__.__ParamInTrace(param=param, step_id_last_used_at=step_id)
-            )
+                __class__.__ParamInTrace(param=param,
+                                         step_id_last_used_at=step_id))
 
     def construct_parameter_trace_from_module_trace(self):
         """use module trace to construct parameter trace"""
@@ -195,8 +188,7 @@ class PartitionedParameterCoordinator:
         if self.__inflight_param_registry:
             raise RuntimeError(
                 f"still have inflight params "
-                f"{[p.ds_summary for p in self.__inflight_param_registry.keys()]}"
-            )
+                f"{[p.ds_summary for p in self.__inflight_param_registry.keys()]}")
 
         if not self.is_complete_trace():  # not self.trace_complete:
             # Make sure that recorded submodule orders are identical across ranks
@@ -207,11 +199,9 @@ class PartitionedParameterCoordinator:
                 self.construct_parameter_trace_from_module_trace()
                 # Make sure that recorded parameter orders are identical across ranks
                 assert_ints_same_as_other_ranks(
-                    [p.param.ds_id for p in self.__param_order]
-                )
+                    [p.param.ds_id for p in self.__param_order])
                 assert_ints_same_as_other_ranks(
-                    [p.step_id_last_used_at for p in self.__param_order]
-                )
+                    [p.step_id_last_used_at for p in self.__param_order])
 
                 self.__submodule_order = tuple(self.__submodule_order)  # freeze
                 self.__param_order = tuple(self.__param_order)  # freeze
@@ -226,11 +216,9 @@ class PartitionedParameterCoordinator:
 
         self.__param_queue = collections.deque(self.__param_order)  # reset fetch queue
         self.__most_recent_step_id_param_fetched_for = collections.defaultdict(
-            lambda: int(-1e10)
-        )
+            lambda: int(-1e10))
         self.__step_id_module_fetched_for = collections.defaultdict(
-            lambda: collections.deque()
-        )
+            lambda: collections.deque())
         self.__step_id = 0
         self.__n_available_params = 0
 
@@ -262,14 +250,11 @@ class PartitionedParameterCoordinator:
         # breakpoint()
         debug_rank0(
             f"{self.__step_id}: M{current_submodule.id}({type(current_submodule).__name__}) P{[p.ds_id for p in iter_params(current_submodule)]} "
-            + str(
-                {
-                    "avail": f"{self.__n_available_params:.1e}",
-                    "queue_sz": f"{len(self.__param_queue or [])}",
-                    "inflight": [p.ds_id for p in self.__inflight_param_registry],
-                }
-            )
-        )
+            + str({
+                "avail": f"{self.__n_available_params:.1e}",
+                "queue_sz": f"{len(self.__param_queue or [])}",
+                "inflight": [p.ds_id for p in self.__inflight_param_registry],
+            }))
 
         params_to_fetch = frozenset(iter_params(current_submodule))
         # breakpoint()
@@ -285,15 +270,11 @@ class PartitionedParameterCoordinator:
             debug_rank0(f"-wait: {param.ds_summary()}")
             if param in self.__inflight_param_registry:
                 with torch.cuda.stream(self.__allgather_stream):
-                    while (
-                        self.__ongoing_fetch_events
-                        and self.__ongoing_fetch_events[0].query()
-                    ):
+                    while (self.__ongoing_fetch_events
+                           and self.__ongoing_fetch_events[0].query()):
                         self.__ongoing_fetch_events.popleft()
-                    if (
-                        len(self.__ongoing_fetch_events)
-                        > self.__max_ongoing_fetch_events
-                    ):
+                    if (len(self.__ongoing_fetch_events) >
+                            self.__max_ongoing_fetch_events):
                         self.__ongoing_fetch_events.popleft().synchronize()
 
                     self.__inflight_param_registry.pop(param).wait()
@@ -315,18 +296,15 @@ class PartitionedParameterCoordinator:
             discarded_from_prefetch_queue = set()
             params_not_already_fetched = set(
                 filter(
-                    lambda p: self.__most_recent_step_id_param_fetched_for[p]
-                    < self.__step_id,
+                    lambda p: self.__most_recent_step_id_param_fetched_for[p] < self.
+                    __step_id,
                     params_to_fetch,
-                )
-            )
+                ))
             while self.__param_queue and len(discarded_from_prefetch_queue) < len(
-                params_not_already_fetched
-            ):
+                    params_not_already_fetched):
                 param_in_trace = self.__param_queue.popleft()
                 self.__most_recent_step_id_param_fetched_for[
-                    param_in_trace.param
-                ] = param_in_trace.step_id_last_used_at
+                    param_in_trace.param] = param_in_trace.step_id_last_used_at
                 discarded_from_prefetch_queue.add(param_in_trace.param)
 
             if discarded_from_prefetch_queue != params_not_already_fetched:
@@ -342,10 +320,8 @@ class PartitionedParameterCoordinator:
                 if param.nvme_swapper is None:
                     return False
 
-                return (
-                    param.ds_tensor.final_location == OffloadDeviceEnum.nvme
-                    and param.ds_tensor.status == PartitionedParamStatus.NOT_AVAILABLE
-                )
+                return (param.ds_tensor.final_location == OffloadDeviceEnum.nvme and
+                        param.ds_tensor.status == PartitionedParamStatus.NOT_AVAILABLE)
 
             # kick off all gather for params in the next few submodules (prefetch)
             if self.__prefetch_bucket_sz > 0:
@@ -357,8 +333,7 @@ class PartitionedParameterCoordinator:
                 numel_prefetching = 0
                 while self.__param_queue and numel_prefetching < max_params_to_prefetch:
                     param_in_trace: __class__.__ParamInTrace = (
-                        self.__param_queue.popleft()
-                    )
+                        self.__param_queue.popleft())
 
                     if _is_currently_on_nvme(param_in_trace.param):
                         # nvme prefetch is handled elsewhere. Need to break here to preserve fetch order
@@ -366,20 +341,17 @@ class PartitionedParameterCoordinator:
                         break
 
                     do_prefetch = (
-                        param_in_trace.param.ds_status == ZeroParamStatus.NOT_AVAILABLE
-                    )
+                        param_in_trace.param.ds_status == ZeroParamStatus.NOT_AVAILABLE)
                     if param_in_trace.param in params_to_prefetch:
                         # Avoid duplicates
                         do_prefetch = False
 
                     self.__most_recent_step_id_param_fetched_for[
-                        param_in_trace.param
-                    ] = max(
-                        self.__most_recent_step_id_param_fetched_for[
-                            param_in_trace.param
-                        ],
-                        param_in_trace.step_id_last_used_at,
-                    )
+                        param_in_trace.param] = max(
+                            self.__most_recent_step_id_param_fetched_for[
+                                param_in_trace.param],
+                            param_in_trace.step_id_last_used_at,
+                        )
 
                     if do_prefetch:
                         params_to_prefetch.add(param_in_trace.param)
@@ -408,11 +380,10 @@ class PartitionedParameterCoordinator:
         # print("Waiting for debugger attach")
         # debugpy.wait_for_client()
 
-        params_to_release = (
-            self.__params_to_release(submodule, self.__step_id)
-            if self.is_complete_trace()
-            else set(p.ds_id for p in iter_params(submodule))
-        )
+        params_to_release = (self.__params_to_release(submodule,
+                                                      self.__step_id)
+                             if self.is_complete_trace() else set(
+                                 p.ds_id for p in iter_params(submodule)))
         for param in iter_params(submodule):
             param.ds_active_sub_modules.discard(submodule.id)
             if param.ds_id in params_to_release and not param.is_external_param:
@@ -456,38 +427,32 @@ class PartitionedParameterCoordinator:
 
             # Release swap buffers for persisted params on nvme since they will never be partitioned or evicted from GPU
             swap_persisted_params = [
-                p
-                for p in partitioned_params
+                p for p in partitioned_params
                 if p.ds_persist and p.ds_tensor.final_location == OffloadDeviceEnum.nvme
             ]
             if swap_persisted_params:
                 swap_persisted_params[
-                    0
-                ].nvme_swapper.remove_partition_and_release_buffers(
-                    swap_persisted_params
-                )
+                    0].nvme_swapper.remove_partition_and_release_buffers(
+                        swap_persisted_params)
 
     @instrument_w_nvtx
     def __release_param(self, param: Parameter) -> None:
-        if (
-            param.ds_status == ZeroParamStatus.AVAILABLE
-            and not param.ds_active_sub_modules
-        ):
+        if (param.ds_status == ZeroParamStatus.AVAILABLE
+                and not param.ds_active_sub_modules):
             debug_rank0(f"-release: {param.ds_summary()}")
             param.partition()
             self.__n_available_params -= param.ds_numel
 
     @instrument_w_nvtx
     @functools.lru_cache(maxsize=None)
-    def __params_to_release(
-        self, submodule_to_release: Module, step_id: int
-    ) -> Set[int]:
+    def __params_to_release(self,
+                            submodule_to_release: Module,
+                            step_id: int) -> Set[int]:
         if not self.is_complete_trace():
             raise RuntimeError("expected trace to be complete")
 
-        params_to_release = set(
-            p.ds_id for p in iter_params(submodule_to_release) if not p.ds_persist
-        )
+        params_to_release = set(p.ds_id for p in iter_params(submodule_to_release)
+                                if not p.ds_persist)
 
         # Problem: When prefetcher scans the param trace, it skips AVAILABLE params.
         # This creates issues if those params are released before the skipped uses:
@@ -521,9 +486,7 @@ class PartitionedParameterCoordinator:
         if not self.is_complete_trace():
             return
 
-        numel_in_flight = sum(
-            param.ds_numel for param in self.__inflight_param_registry
-        )
+        numel_in_flight = sum(param.ds_numel for param in self.__inflight_param_registry)
 
         numel_considered = 0
         swap_in_params = []
@@ -531,10 +494,8 @@ class PartitionedParameterCoordinator:
             param = param_in_trace.param
             if param.nvme_swapper is None:
                 continue
-            if (
-                numel_considered > 2 * numel_in_flight
-                or len(swap_in_params) >= param.nvme_swapper.available_swap_in_buffers()
-            ):
+            if (numel_considered > 2 * numel_in_flight or len(swap_in_params) >=
+                    param.nvme_swapper.available_swap_in_buffers()):
                 break
             if param.ds_tensor.status == PartitionedParamStatus.NOT_AVAILABLE:
                 swap_in_params.append(param)
