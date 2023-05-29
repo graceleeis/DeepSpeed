@@ -38,6 +38,22 @@ param_count = 0
 partitioned_param_data_shape = [0]
 zero_init_enabled = False
 
+XR_PARAM_SCOPE_SIZE_1 = 16 * 1024 * 1024 * 1024
+XR_PARAM_SCOPE_SIZE_2 = 8 * 1024 * 1024 * 1024
+XR_PARAM_SCOPE_SIZE_3 = 4 * 1024 * 1024 * 1024
+XR_PARAM_SCOPE_SIZE_4 = 2 * 1024 * 1024 * 1024
+XR_PARAM_SCOPE_SIZE_5 = 1 * 1024 * 1024 * 1024
+ENABLE_XR_NEBULA=False
+
+if os.environ.get('enable_nebula_inference') is not None:
+    ENABLE_XR_NEBULA = True
+    print("ENABLE_XR_NEBULA")
+
+if ENABLE_XR_NEBULA:
+    xr_param_index = {}
+    xr_scope = []
+
+
 
 def _dist_allgather_fn(input_tensor: Tensor, output_tensor: Tensor, group=None):
     return instrument_w_nvtx(dist.allgather_fn)(output_tensor,
@@ -868,11 +884,21 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                            partition_sz * i,
                                            partition_sz))
 
-                instrument_w_nvtx(torch.cat)([
-                    p.ds_tensor.to(get_accelerator().current_device_name())
-                    for p in params
-                ],
-                                             out=partitions[self.rank])
+                if ENABLE_XR_NEBULA and all(p.ds_id == params[0].ds_id for p in params):
+                    global xr_param_index, xr_scope
+                    index, offset, length = xr_param_index[params[0].ds_id], math.inf, 0
+                    for p in params:
+                        offset = xr_param_index[p.ds_id][1] if xr_param_index[
+                            p.ds_id][1] < offset else offset
+                        length += xr_param_index[p.ds_id][2]
+                    scope = xr_scope[index - 1][offset:offset + length]
+                    partitions[self.rank].copy_(scope)
+                else:
+                    instrument_w_nvtx(torch.cat)([
+                        p.ds_tensor.to(get_accelerator().current_device_name())
+                        for p in params
+                    ],
+                                                out=partitions[self.rank])
                 handle = _dist_allgather_fn(partitions[self.rank],
                                             flat_tensor,
                                             self.ds_process_group)
@@ -1037,6 +1063,43 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             # self._param_status(param)
             self._partition_param(param, has_been_updated=has_been_updated)
             param.ds_status = ZeroParamStatus.NOT_AVAILABLE
+
+            if ENABLE_XR_NEBULA:
+                import inspect
+                for caller in inspect.stack():
+                    if caller.function == "__release_param":
+                        return
+                global xr_param_index
+                global xr_scope
+
+                if not xr_scope:
+                    for i in (1, 2):
+                        xr_scope.append([(torch.empty(eval(f"XR_PARAM_SCOPE_SIZE_{i}"),
+                                                      dtype=torch.float16,
+                                                      device="cpu").pin_memory()),
+                                         0,
+                                         i])
+
+                if param.ds_id not in xr_param_index:
+                    for s in xr_scope:
+                        if s[1] + param.ds_tensor.ds_numel <= torch.numel(s[0]):
+                            xr_param_index[param.ds_id] = (s[2],
+                                                           s[1],
+                                                           param.ds_tensor.ds_numel)
+                            s[1] += param.ds_tensor.ds_numel
+                            break
+
+                param_number = xr_param_index[param.ds_id][0]
+                xr_partition_param = None
+                for s in xr_scope:
+                    if s[2] == param_number:
+                        xr_partition_param = s[0][xr_param_index[
+                            param.ds_id][1]:xr_param_index[param.ds_id][1] +
+                                                  xr_param_index[param.ds_id][2]]
+                        break
+
+                xr_partition_param.copy_(param.ds_tensor)
+                param.ds_tensor.data = xr_partition_param.data
             # if param.ds_tensor is not None:
             #    assert id(param.data) == id(param.ds_tensor.data), \
             #    "After the parameters are initially partitioned, make sure we are not recreating the partition."
